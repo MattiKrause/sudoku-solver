@@ -2,6 +2,7 @@ mod solver_impl;
 
 use crate::solver_base::{LLGeneralSudokuSolver, LLSudokuSolverImpl};
 use crate::{Sudoku, LLSudokuSolverInst};
+use crate::work_queue::WorkQueue;
 
 pub type SimpleSolver = LLGeneralSudokuSolver<SimpleSolverImpl>;
 pub struct SimpleSolverImpl;
@@ -11,11 +12,11 @@ impl Default for SimpleSolverImpl {
     }
 }
 impl LLSudokuSolverImpl for SimpleSolverImpl {
-    fn tell_value_i(&mut self, inst: &mut LLSudokuSolverInst, i: u8, val: u8, sudoku: &mut Sudoku, work_q: &mut Vec<u16>) -> Result<u32, ()> {
-        todo!()
+    fn tell_value_i(&mut self, inst: &mut LLSudokuSolverInst, i: u8, val: u8, sudoku: &mut Sudoku, work_q: &mut WorkQueue<u16>) -> Result<(), ()> {
+        Ok(())
     }
 
-    fn tell_at_ind(&mut self, inst: &mut LLSudokuSolverInst, i: u8, sudoku: &mut Sudoku, work_q: &mut Vec<u16>) -> Result<u32, ()> {
-        todo!()
+    fn tell_at_ind(&mut self, inst: &mut LLSudokuSolverInst, i: u8, sudoku: &mut Sudoku, work_q: &mut WorkQueue<u16>) -> Result<(), ()> {
+        Ok(())
     }
 }

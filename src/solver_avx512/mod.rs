@@ -4,6 +4,7 @@ use std::mem::MaybeUninit;
 use crate::Sudoku;
 use crate::solver_avx512::dbg_dmp::DbgDmp;
 use crate::solver_base::{LLGeneralSudokuSolver, LLSudokuSolverImpl, LLSudokuSolverInst};
+use crate::work_queue::WorkQueue;
 
 mod dbg_dmp;
 #[cfg(test)]
@@ -55,15 +56,7 @@ macro_rules! dbg_vec_bin {
     };
 }
 
-unsafe fn work_q_end_ptr(work_q: &mut Vec<u16>) -> *mut u16 {
-    work_q.as_mut_ptr().add(work_q.len())
-}
-
-unsafe fn increase_q_len_by(work_q: &mut Vec<u16>, len: usize) {
-    work_q.set_len(work_q.len() + len)
-}
-
-unsafe fn detect_1_pos(old: __m512i, new: __m512i, idx: __m512i, write_to: *mut u16) -> (u32, u16) {
+unsafe fn detect_1_pos(old: __m512i, new: __m512i, idx: __m512i, write_to: &mut WorkQueue<u16>) -> u16 {
     //checkck if vals changed
     let changed: u16 = _mm512_cmp_epi32_mask::<4>(old, new);
     let pos_cnt = _mm512_popcnt_epi32(new);
@@ -72,20 +65,19 @@ unsafe fn detect_1_pos(old: __m512i, new: __m512i, idx: __m512i, write_to: *mut 
     let changed_one_pos = one_pos & changed;
     let idxu16 = _mm512_cvtepi32_epi16(idx);
     //store all indices where the content has changed, with one possible value remaining in the set
-    _mm256_mask_compressstoreu_epi16(write_to as *mut u8, changed_one_pos, idxu16);
-    (changed_one_pos.count_ones(), changed)
+    write_to.write_simd256u16(idxu16, changed_one_pos);
+    changed
 }
 
-unsafe fn reduce_entropy_for_i(src: *mut i32, idx: __m512i, rem_mask: __m512i, work_q: &mut Vec<u16>) -> (u32, u16) {
+unsafe fn reduce_entropy_for_i(src: *mut i32, idx: __m512i, rem_mask: __m512i, work_q: &mut WorkQueue<u16>) -> u16 {
     //load lane
     let vals = _mm512_i32gather_epi32::<4>(idx, src as *const u8);
     //remove val from bitset using rem_mask
     let vals_rem = _mm512_and_si512(vals, rem_mask);
     //store lane
     _mm512_i32scatter_epi32::<4>(src as *mut u8, idx, vals_rem);
-    let (new_work, changed) = detect_1_pos(vals, vals_rem, idx, work_q_end_ptr(work_q));
-    increase_q_len_by(work_q, new_work as usize);
-    (new_work, changed)
+    let changed = detect_1_pos(vals, vals_rem, idx, work_q);
+    changed
 
 }
 
@@ -134,14 +126,13 @@ unsafe fn dec_num_count(changed: u16, mis_i_set: u32, cnt_ptr: *mut i32, cnt_idx
     (one_idx, write_mask.count_ones())
 }
 
-unsafe fn mask_current_quadrant(quad_offset: i32, rem_mask: __m512i, content: *mut i32, quad_i: __m512i, work_q: &mut Vec<u16>) {
+unsafe fn mask_current_quadrant(quad_offset: i32, rem_mask: __m512i, content: *mut i32, quad_i: __m512i, work_q: &mut WorkQueue<u16>) {
     let quad_off = _mm512_set1_epi32( quad_offset);
     let cur_quad = _mm512_add_epi32(quad_i, quad_off);
     let quad = _mm512_i32gather_epi32::<4>(cur_quad, content as *const u8);
     let quad_new = _mm512_mask_and_epi32(quad, 0b111_111_111,quad, rem_mask);
     _mm512_mask_i32scatter_epi32::<4>(content as *mut u8, 0b111_111_111, cur_quad, quad_new);
-    let changed_by = detect_1_pos(quad, quad_new, cur_quad, work_q_end_ptr(work_q)).0;
-    increase_q_len_by(work_q, changed_by as usize);
+    detect_1_pos(quad, quad_new, cur_quad, work_q);
 }
 
 /// the quadrant given through the first 9 slots in quad_indices has only one possible location
@@ -208,7 +199,7 @@ unsafe fn adjust_pos_counts(line: u8, col: u8, changed: u16, counts: *mut i32) -
     dec_num_count(changed, mis_i_both, counts, cnt_idx)
 }
 
-unsafe fn add_one_count_to_q(one_count_i: [i32; 6], mut oc_len: usize, content: *mut i32, rem_mask: __m512i, quad_i: __m512i, work_q: &mut Vec<u16>)  {
+unsafe fn add_one_count_to_q(one_count_i: [i32; 6], mut oc_len: usize, content: *mut i32, rem_mask: __m512i, quad_i: __m512i, work_q: &mut WorkQueue<u16>)  {
     //while instead of for to prevent strange error
     while oc_len > 0 {
         oc_len -= 1;
@@ -241,7 +232,7 @@ fn comp_line_col(i: u8) -> (u8, u8) {
     (i / 9, i % 9)
 }
 
-unsafe fn check_set(inst: &mut LLSudokuSolverInst, i: u8, val: i32, work_q: &mut Vec<u16>) -> u32 {
+unsafe fn check_set(inst: &mut LLSudokuSolverInst, i: u8, val: i32, work_q: &mut WorkQueue<u16>) {
     let (line, col) = comp_line_col(i);
 
     let (quad_ln, quad_col) = ((line / 3) * 3, col / 3);
@@ -251,11 +242,10 @@ unsafe fn check_set(inst: &mut LLSudokuSolverInst, i: u8, val: i32, work_q: &mut
     let rem_mask = _mm512_set1_epi32(!(1 << val));
     mask_current_quadrant(i_quad_start as i32, rem_mask,inst.content.as_mut_ptr(), quad_i, work_q);
     let lane_i = compute_lane_indices(line, col);
-    let (mut new_q, changed) = reduce_entropy_for_i(inst.content.as_mut_ptr(), lane_i, rem_mask, work_q);
+    let changed = reduce_entropy_for_i(inst.content.as_mut_ptr(), lane_i, rem_mask, work_q);
     let (one_count_i, oci) = adjust_pos_counts(line, col, changed, inst.num_counts[val as usize].as_mut_ptr());
     debug_assert!((&one_count_i[0..(oci as usize)]).iter().map(|i| inst.num_counts[val as usize][*i as usize]).all(|c| c==1));
     add_one_count_to_q(one_count_i, oci as usize, inst.content.as_mut_ptr(), rem_mask, quad_i, work_q);
-    new_q
 }
 
 pub type Avx512SudokuSolver = LLGeneralSudokuSolver<Avx512SudokuSolverImpl>;
@@ -267,7 +257,7 @@ impl Default for Avx512SudokuSolverImpl {
 }
 
 impl LLSudokuSolverImpl for Avx512SudokuSolverImpl {
-    fn tell_value_i(&mut self, inst: &mut LLSudokuSolverInst, i: u8, val: u8, sudoku: &mut Sudoku, work_q: &mut Vec<u16>) -> Result<u32, ()> {
+    fn tell_value_i(&mut self, inst: &mut LLSudokuSolverInst, i: u8, val: u8, sudoku: &mut Sudoku, work_q: &mut WorkQueue<u16>) -> Result<(), ()> {
         let i = i as usize;
         let new_content = 1 << (val - 1);
         unsafe {
@@ -285,23 +275,23 @@ impl LLSudokuSolverImpl for Avx512SudokuSolverImpl {
         inst.content[i as usize] = new_content;
         self.tell_at_ind(inst,i as u8, sudoku, work_q)
     }
-    fn tell_at_ind(&mut self, inst: &mut LLSudokuSolverInst, i: u8, sudoku: &mut Sudoku, work_q: &mut Vec<u16>) -> Result<u32, ()> {
+    fn tell_at_ind(&mut self, inst: &mut LLSudokuSolverInst, i: u8, sudoku: &mut Sudoku, work_q: &mut WorkQueue<u16>) -> Result<(), ()> {
         let val = inst.content[i as usize];
         let val_set = val.trailing_zeros() as i32;
         if val == 0 || val_set > 9 {
             return Err(());
         }
-        if work_q.capacity() - work_q.len() < 27 {
-            return Err(());
-        }
         inst.content[i as usize] = 0;
+        let old_len = work_q.len();
         sudoku.set_i(i, val_set as u16 + 1);
         let res = unsafe {
-            Ok(check_set(inst, i, val_set, work_q))
+            check_set(inst, i, val_set, work_q);
+            if old_len != work_q.len() {
+                dbg!(&work_q.as_slice()[old_len..]);
+                dbg!(i, work_q.as_slice());
+            }
+            Ok(())
         };
-        if inst.content[74] == 0b1000 {
-            dbg!(i);
-        }
         res
     }
 }
