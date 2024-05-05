@@ -5,32 +5,12 @@ use crate::Sudoku;
 use crate::solver_avx512::dbg_dmp::DbgDmp;
 use crate::solver_base::{LLGeneralSudokuSolver, LLSudokuSolverImpl, LLSudokuSolverInst};
 use crate::work_queue::WorkQueue;
+use self::util::*;
 
 mod dbg_dmp;
 #[cfg(test)]
 mod tests;
-
-const fn comp_col() -> [[u8; 8]; 9] {
-    let mut res = [[0; 8]; 9];
-    let mut i = 0;
-    while i < 9 {
-        let mut wr_i = 0;
-        let mut resi = [0; 8];
-        let mut j = 0;
-        while j < 9 {
-            if j != i {
-                resi[wr_i] = j as u8;
-                wr_i += 1;
-            }
-            j += 1;
-        }
-        res[i] = resi;
-        i += 1;
-    }
-    res
-}
-static LN_CHECK_PERM: [[u8; 8]; 9] = comp_col();
-static A9X9: [i32; 9] = [0, 1, 2, 9, 10, 11, 18, 19, 20];
+mod util;
 
 macro_rules! str_vec {
     ($vec:expr, $n: ident, $t: ident) => {
@@ -57,11 +37,11 @@ macro_rules! dbg_vec_bin {
 }
 
 unsafe fn detect_1_pos(old: __m512i, new: __m512i, idx: __m512i, write_to: &mut WorkQueue<u16>) -> u16 {
-    //checkck if vals changed
-    let changed: u16 = _mm512_cmp_epi32_mask::<4>(old, new);
+    //check if vals changed
+    let changed: u16 = _mm512_cmp_epi32_mask::<_MM_CMPINT_NE>(old, new);
     let pos_cnt = _mm512_popcnt_epi32(new);
-    let ones = _mm512_set1_epi32(1);
-    let one_pos: u16 = _mm512_cmp_epi32_mask::<0>(pos_cnt, ones);
+    let ones = splat_i32x16(1);
+    let one_pos: u16 = _mm512_cmp_epi32_mask::<_MM_CMPINT_EQ>(pos_cnt, ones);
     let changed_one_pos = one_pos & changed;
     let idxu16 = _mm512_cvtepi32_epi16(idx);
     //store all indices where the content has changed, with one possible value remaining in the set
@@ -79,19 +59,6 @@ unsafe fn reduce_entropy_for_i(src: *mut i32, idx: __m512i, rem_mask: __m512i, w
     let changed = detect_1_pos(vals, vals_rem, idx, work_q);
     changed
 
-}
-
-/// accumulate the first 6 triplets and pull the results into the first 6 slots.
-/// The numbers should be 8 bit
-unsafe fn three_accum(mut vals: __m256i) -> __m256i {
-    vals = _mm256_maskz_expand_epi8(0b111_111_111_111_111_0_111, vals);
-    // shift all values one unit towards the start of the vec and add, now we have 1 + 2, 3, *
-    let mut vals_s = _mm256_alignr_epi8::<1>(vals, vals);
-    vals = _mm256_mask_add_epi8(vals_s, 0b001001001_001001_0_001, vals_s, vals);
-    // shift another unit, now we have, 1 + 2 + 3, *, *
-    vals_s = _mm256_alignr_epi8::<1>(vals, vals);
-    vals = _mm256_mask_add_epi8(vals_s, 0b001001001_001001_0_001, vals_s, vals);
-    _mm256_maskz_compress_epi8(0b001001001_001001_0_001, vals)
 }
 
 /// count the number of changes for each quadrant, subtract that from current number and save the result.
@@ -154,48 +121,10 @@ unsafe fn find_pos_in_one_quad(rem_mask: __m512i, ptr: *mut i32, quad_indices: _
     i.assume_init()
 }
 
-unsafe fn compute_lane_indices(line: u8, col: u8) -> __m512i {
-    let col_i = {
-        let col =  _mm_maskz_loadu_epi8(0x00FF, LN_CHECK_PERM[col as usize].as_ptr() as *const i8);
-        let col_off = _mm_set1_epi8((line * 9) as i8);
-        let col_i = _mm_add_epi8(col, col_off);
-        _mm256_cvtepi8_epi32(col_i)
-    };
-    let line_i = {
-        let line = _mm_maskz_loadu_epi8(0x00FF, LN_CHECK_PERM[line as usize].as_ptr() as *const i8);
-        //dbg_vec!(line, i8);
-        let line = _mm256_cvtepi8_epi32(line);
-        let line_mul = _mm256_set1_epi32(9);
-        let line = _mm256_mullo_epi32(line, line_mul);
-        let line_off = _mm256_set1_epi32(col as i32);
-        _mm256_add_epi32(line, line_off)
-    };
-    let col_i = _mm512_zextsi256_si512(col_i);
-    let lane_i = _mm512_inserti64x4::<1>(col_i, line_i);
-    lane_i
-}
-
-unsafe fn comp_cnt_indices(line: u8, col: u8) -> __m256i {
-    static IDX012: [i32; 3] = [0, 1, 2];
-    let vec012 = _mm_maskz_loadu_epi32(0b111, IDX012.as_ptr());
-    let line_offset = _mm_set1_epi32(((line / 3) * 3) as i32);
-    let three_vec = _mm_set1_epi32(3);
-    let col_vec = _mm_add_epi32(vec012, line_offset);
-    let line_starts = _mm_mullo_epi32(three_vec, vec012);
-    let col_offset = _mm_set1_epi32((col / 3) as i32);
-    let line_vec = _mm_add_epi32(line_starts, col_offset);
-    let col_vec = _mm256_zextsi128_si256(col_vec);
-    let both_vec = _mm256_inserti128_si256::<1>(col_vec, line_vec);
-    _mm256_maskz_compress_epi32(0b1110111, both_vec)
-}
 
 unsafe fn adjust_pos_counts(line: u8, col: u8, changed: u16, counts: *mut i32) ->  ([i32; 6], u32) {
-    static MIS_SET: [u16; 9] = [
-        0b111_111_110, 0b111_111_101, 0b111_111_011, 0b111_110_111,
-        0b111_101_111, 0b111_011_111, 0b110_111_111, 0b101_111_111, 0b011_111_111
-    ];
     let cnt_idx = comp_cnt_indices(line, col);
-    let mis_i_both = ((MIS_SET[line as usize] as u32) << 9) | (MIS_SET[col as usize] as u32);
+    let mis_i_both = comp_mis_set(line, col);
     dec_num_count(changed, mis_i_both, counts, cnt_idx)
 }
 
@@ -203,13 +132,13 @@ unsafe fn add_one_count_to_q(one_count_i: [i32; 6], mut oc_len: usize, content: 
     //while instead of for to prevent strange error
     while oc_len > 0 {
         oc_len -= 1;
-        let q = one_count_i[oc_len];
-        debug_assert!(q >= 0, "index {q} is negative");
-        let ind_quad = (q / 3) * 3 * 9 + (q % 3) * 3;
-        let quad_off = _mm512_set1_epi32(ind_quad as i32);
+        let qi = one_count_i[oc_len];
+        debug_assert!(qi >= 0, "index {qi} is negative");
+        let quad_offset = comp_quad_offset(qline_qcol_from_qi(qi));
+        let quad_off = _mm512_set1_epi32(quad_offset);
         let cur_quad = _mm512_add_epi32(quad_i, quad_off);
         let ind = find_pos_in_one_quad(rem_mask, content, cur_quad);
-        debug_assert!(u16::try_from(ind).is_ok(), "{q} is not a i32");
+        debug_assert!(u16::try_from(ind).is_ok(), "{qi} is not a i32");
         work_q.push(ind as u16);
     }
 }
@@ -228,24 +157,23 @@ unsafe fn force_dec_num_count(counts_ptr: *mut i32, remaining: u16, quad_index: 
     _mm512_mask_i32scatter_epi32::<4>(counts_ptr as *mut u8, remaining, count_idx, new_counts);
 }
 
-fn comp_line_col(i: u8) -> (u8, u8) {
-    (i / 9, i % 9)
+fn all_one_count_i_are_one_count(oci: &[i32], counts: &[i32]) -> bool {
+    oci.iter().map(|i| counts[*i as usize]).all(|c| c==1)
 }
 
 unsafe fn check_set(inst: &mut LLSudokuSolverInst, i: u8, val: i32, work_q: &mut WorkQueue<u16>) {
-    let (line, col) = comp_line_col(i);
-
-    let (quad_ln, quad_col) = ((line / 3) * 3, col / 3);
-    inst.num_counts[val as  usize][(quad_ln + quad_col) as usize] = 0;
-    let i_quad_start = quad_ln * 9 + quad_col * 3;
-    let quad_i = _mm512_maskz_loadu_epi32(0b111_111_111, A9X9.as_ptr());
-    let rem_mask = _mm512_set1_epi32(!(1 << val));
-    mask_current_quadrant(i_quad_start as i32, rem_mask,inst.content.as_mut_ptr(), quad_i, work_q);
+    let (line, col) = line_col_from_i(i);
+    let (qline, qcol) = comp_qline_qcol((line, col));
+    inst.num_counts[val as  usize][qi_from_qline_qcol((qline, qcol)) as usize] = 0;
+    let i_quad_start = comp_quad_offset((qline, qcol)) as i32;
+    let quad_i = load_quad_i();
+    let rem_mask = _mm512_set1_epi32(comp_rem_mask(val));
+    mask_current_quadrant(i_quad_start, rem_mask,inst.content.as_mut_ptr(), quad_i, work_q);
     let lane_i = compute_lane_indices(line, col);
     let changed = reduce_entropy_for_i(inst.content.as_mut_ptr(), lane_i, rem_mask, work_q);
-    let (one_count_i, oci) = adjust_pos_counts(line, col, changed, inst.num_counts[val as usize].as_mut_ptr());
-    debug_assert!((&one_count_i[0..(oci as usize)]).iter().map(|i| inst.num_counts[val as usize][*i as usize]).all(|c| c==1));
-    add_one_count_to_q(one_count_i, oci as usize, inst.content.as_mut_ptr(), rem_mask, quad_i, work_q);
+    let (one_count_i, oci_len) = adjust_pos_counts(line, col, changed, inst.num_counts[val as usize].as_mut_ptr());
+    debug_assert!(all_one_count_i_are_one_count(&one_count_i[0..(oci_len as usize)], &inst.num_counts[val as usize]));
+    add_one_count_to_q(one_count_i, oci_len as usize, inst.content.as_mut_ptr(), rem_mask, quad_i, work_q);
 }
 
 pub type Avx512SudokuSolver = LLGeneralSudokuSolver<Avx512SudokuSolverImpl>;
@@ -261,11 +189,11 @@ impl LLSudokuSolverImpl for Avx512SudokuSolverImpl {
         let i = i as usize;
         let new_content = 1 << (val - 1);
         unsafe {
-            let quad_offset = ((i / 9) / 3) * 3 + ((i % 9) / 3);
+            let quad_i = qi_from_qline_qcol(comp_qline_qcol(line_col_from_i(i)));
             force_dec_num_count(
                 inst.num_counts.as_mut_ptr()  as *mut i32,
                 (inst.content[i] ^ new_content) as u16,
-                quad_offset as i32
+                quad_i as i32
             );
         }
         if inst.content[i] & new_content == 0 {
