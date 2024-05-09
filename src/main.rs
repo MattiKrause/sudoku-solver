@@ -1,5 +1,9 @@
 #![feature(stdsimd)]
 #![feature(concat_idents)]
+#![feature(slice_flatten)]
+#![feature(portable_simd)]
+
+extern crate core;
 
 #[cfg(all(target_arch = "x86_64", target_feature = "sse", target_feature = "avx", target_feature = "avx2", target_feature = "avx512f", target_feature = "avx512bw", target_feature = "avx512vl"))]
 mod solver_avx512;
@@ -14,22 +18,52 @@ use solver_simple::SimpleSolver as DefaultSolver;
 use std::str::FromStr;
 
 use solver_base::LLSudokuSolverInst;
-use crate::solver_base::{GeneralSudokuSolver, LLSudokuSolverImpl};
+use crate::solver_base::{CellIndex, CellIndices, FlatIndex, GeneralSudokuSolver, Indices, LLSudokuSolverImpl, SudokuValue};
 
 
 pub struct Sudoku {
-    content: Box<[u16; 81]>
+    content: Box<[Option<SudokuValue>; 81]>
 }
 
 impl Sudoku {
     fn new() -> Self {
         Self {
-            content: Box::new([0; 81])
+            content: Box::new([None; 81])
         }
     }
 
-    fn set_i(&mut self, index: u8, val: u16) {
-        self.content[index as usize] = val;
+    fn set_i(&mut self, index: FlatIndex, val: SudokuValue) {
+        self.content[index.as_idx()] = Some(val);
+    }
+}
+
+impl std::ops::Index<FlatIndex> for Sudoku {
+    type Output = Option<SudokuValue>;
+
+    fn index(&self, index: FlatIndex) -> &Self::Output {
+        &self.content[index.as_idx()]
+    }
+}
+impl std::ops::IndexMut<FlatIndex> for Sudoku {
+    fn index_mut(&mut self, index: FlatIndex) -> &mut Self::Output {
+        &mut self.content[index.as_idx()]
+    }
+}
+impl std::fmt::Display for Sudoku {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for row in 0..9 {
+            for column in 0..9 {
+                let index: u8 = row  * 9 + column;
+                let index = usize::from(index);
+                let value = self.content[index];
+                match value {
+                    None => write!(f, "/")?,
+                    Some(v) => std::fmt::Display::fmt(&v.get_1based(), f)?
+                }
+            }
+            writeln!(f)?;
+        }
+        Ok(())
     }
 }
 
@@ -42,26 +76,64 @@ fn main() {
         .map(|(l, ln)| ln.enumerate().map( move |(c, x)| ((l, c), x)))
         .flatten()
         .filter(|(_, v)| !v.is_empty())
-        .map(|((l, c), v)| ((l as u8, c as u8), v))
-        .map(|(c, v)| (c, u8::from_str(v).expect("error")))
+        .map(|((l, c), v)| ((CellIndex::new(l as u8).unwrap(), CellIndex::new(c as u8).unwrap()), v))
+        .map(|(c, v)| (c, SudokuValue::new_1based(u8::from_str(v).expect("error")).unwrap()))
         .collect();
     dbg!(given1.len());
     let mut solv = DefaultSolver::new();
     for ((l, c), v) in given1 {
-        let res = solv.give_val((l, c , v));
+        let res = solv.give_val(Indices { row: l, column: c }, v);
         if let Err(_) = res {
             eprintln!("sudoku unsolvable:!");
+            solv.give_val(Indices { row: l, column: c }, v);
             return;
         }
     }
     let sudoku = solv.run();
-    for i in 0..9 {
-        for j in 0..9 {
-            print!("{},", sudoku.content.as_ref()[i * 9 + j]);
-        }
-        println!();
-    }
+    println!("{sudoku}");
+    check_sudoku(&sudoku);
     println!("Hello, world!");
+}
+
+fn check_sudoku(sudoku: &Sudoku) {
+    for i in 0..81 {
+        sudoku.content[i].unwrap();
+    }
+    for axis1 in 0..9 {
+        for axis2 in 0..9 {
+            for p in 0..axis2 {
+                let axis1 = CellIndex::new(axis1).unwrap();
+                let axis2 = CellIndex::new(axis2).unwrap();
+                let p = CellIndex::new(p).unwrap();
+                let idx = CellIndices { row: axis1, column: axis2 };
+                let idx2 = CellIndices { row: axis1, column: p };
+                assert_ne!(sudoku[FlatIndex::from(idx)], sudoku[FlatIndex::from(idx2)]);
+                let idx = CellIndices { row: axis2, column: axis1 };
+                let idx2 = CellIndices { row: p, column: axis1 };
+                assert_ne!(sudoku[FlatIndex::from(idx)], sudoku[FlatIndex::from(idx2)]);
+
+            }
+        }
+    }
+    for q1 in (0..3).map(|i| i * 3) {
+        for q2 in (0..3).map(|i| i * 3) {
+            let qis = (q1..(q1 + 3))
+                .flat_map(|a1| (q2..(q2 + 3)).map(move |a2| (a1, a2)))
+                .map(|(a1, a2)| CellIndices { row: CellIndex::new(a1).unwrap(), column: CellIndex::new(a2).unwrap() })
+                .map(FlatIndex::from)
+                .collect::<Vec<_>>();
+            for i in 0..9 {
+                for j in 0..i {
+                    assert_ne!(sudoku[qis[i]], sudoku[qis[j]]);
+                }
+            }
+            for a1 in (q1..(q1 + 3)) {
+                for a2 in q2..(q2 + 3) {
+
+                }
+            }
+        }
+    }
 }
 
 /*

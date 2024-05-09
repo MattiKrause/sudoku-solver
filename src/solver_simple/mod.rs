@@ -11,12 +11,3 @@ impl Default for SimpleSolverImpl {
         Self
     }
 }
-impl LLSudokuSolverImpl for SimpleSolverImpl {
-    fn tell_value_i(&mut self, inst: &mut LLSudokuSolverInst, i: u8, val: u8, sudoku: &mut Sudoku, work_q: &mut WorkQueue<u16>) -> Result<(), ()> {
-        Ok(())
-    }
-
-    fn tell_at_ind(&mut self, inst: &mut LLSudokuSolverInst, i: u8, sudoku: &mut Sudoku, work_q: &mut WorkQueue<u16>) -> Result<(), ()> {
-        Ok(())
-    }
-}
