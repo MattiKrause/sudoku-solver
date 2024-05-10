@@ -1,25 +1,59 @@
-use crate::Sudoku;
-use crate::work_queue::{WorkQueue, WorkQueue81};
+use std::ops::IndexMut;
 pub use indices::*;
 
-pub struct LLSudokuSolverInst {
-    pub content: Box<[i32; 81]>,
+use crate::Sudoku;
+use crate::work_queue::WorkQueue;
+
+pub struct LLSudokuSolverInst<MASK, COUNT>{
+    content: Box<[MASK; 96]>,
     //outer: number, inner: 9x9 area
-    pub num_counts: Box<[[i32; 9]; 9]>,
+    num_counts: Box<[[COUNT; 9]; 9]>,
 }
 
-impl LLSudokuSolverInst {
+impl <MASK: From<u16> + Copy, COUNT: From<u8> + Copy> LLSudokuSolverInst<MASK, COUNT> {
     pub fn new() -> Self {
         Self {
-            content: Box::new([0b1_1111_1111; 81]),
-            num_counts: Box::new([[9; 9]; 9]),
+            content: Box::new([MASK::from(0b1_1111_1111); 96]),
+            num_counts: Box::new([[COUNT::from(9); 9]; 9]),
         }
     }
 
+    pub fn content(&self) -> &[MASK; 81] {
+        self.content[0..81].try_into().unwrap()
+    }
+    pub fn content_aligned(&self) -> &[MASK; 96] {
+        &self.content
+    }
+    pub fn content_mut(&mut self) -> &mut [MASK; 81] {
+        self.content.index_mut(..81).try_into().unwrap()
+    }
+    pub fn content_aligned_mut(&mut self) -> &mut [MASK; 96] {
+        &mut self.content
+    }
+    pub fn num_counts(&self) -> &[[COUNT; 9]; 9] {
+        &self.num_counts
+    }
+    pub fn num_counts_mut(&mut self) -> &mut [[COUNT; 9]; 9] {
+        &mut self.num_counts
+    }
+}
+
+impl <MASK: Copy + std::fmt::Debug, COUNT> LLSudokuSolverInst<MASK, COUNT> where u16: TryFrom<MASK>{
     pub fn debug_print(&self) {
         for i in 0..9 {
             for j in 0..9 {
-                print!("{:09b},", self.content.as_ref()[i * 9 + j]);
+                let mask = self.content.as_ref()[i * 9 + j];
+                let Ok(mask) = u16::try_from(mask) else {
+                    panic!("{mask:?} is not a valid mask!")
+                };
+                for v in 0..9 {
+                    if (mask >> v) & 1 > 0 {
+                        print!("{}", v + 1);
+                    } else {
+                        print!("-")
+                    }
+                }
+                print!("  ");
             }
             println!();
         }
@@ -32,36 +66,36 @@ pub trait GeneralSudokuSolver {
     fn run(self) -> Sudoku;
 }
 
-pub struct LLGeneralSudokuSolver<T> {
+
+
+pub struct LLGeneralSudokuSolver<T: LLSudokuSolverImpl> {
     base_impl: T,
-    solver_inst: LLSudokuSolverInst,
+    pub solver_inst: LLSudokuSolverInst<T::Mask, T::Count>,
     sudoku: Sudoku,
-    work_queue: WorkQueue81<u16>
+    pub work_queue: T::WorkQueue
 }
 
-impl <T: LLSudokuSolverImpl + Default> GeneralSudokuSolver for LLGeneralSudokuSolver<T> {
+impl <T: LLSudokuSolverImpl + Default> GeneralSudokuSolver for LLGeneralSudokuSolver<T> where u16:TryFrom<T::Mask>{
     fn new() -> Self {
         Self {
             base_impl: T::default(),
             solver_inst: LLSudokuSolverInst::new() ,
             sudoku: Sudoku::new(),
-            work_queue: WorkQueue81::new()
+            work_queue: T::WorkQueue::new()
         }
     }
 
     fn give_val(&mut self, lc: CellIndices, v: SudokuValue) -> Result<(), ()> {
-        self.solver_inst.debug_print();
-        println!("{}", self.sudoku);
-        self.base_impl.tell_value(&mut self.solver_inst, lc, v, &mut self.sudoku, &mut self.work_queue.wq)
+        self.base_impl.tell_value(&mut self.solver_inst, lc, v, &mut self.sudoku, &mut self.work_queue)
     }
 
     fn run(mut self) -> Sudoku {
-        println!("{}", self.sudoku);
-        while let Some(rem) = self.work_queue.wq.pop() {
-
-            let res = self.base_impl.process_index(&mut self.solver_inst, FlatIndex::new(rem as u8).unwrap(), &mut self.sudoku, &mut self.work_queue.wq);
-
+        while let Some(rem) = self.work_queue.pop() {
+            let res = self.base_impl.process_index(&mut self.solver_inst, rem, &mut self.sudoku, &mut self.work_queue);
             if let Err(_) = res {
+                self.solver_inst.debug_print();
+                dbg!(self.sudoku[FlatIndex::new(67).unwrap()]);
+                // row 8/cell 5
                 return self.sudoku;
             }
         }
@@ -70,16 +104,20 @@ impl <T: LLSudokuSolverImpl + Default> GeneralSudokuSolver for LLGeneralSudokuSo
 }
 
 pub trait LLSudokuSolverImpl {
-    fn tell_value(&mut self, inst: &mut LLSudokuSolverInst, indices: CellIndices, val: SudokuValue, sudoku: &mut Sudoku, work_q: &mut WorkQueue<u16>) -> Result<(), ()> {
+    type Mask: From<u16> + Copy + std::fmt::Debug;
+    type Count: From<u8> + Copy + std::fmt::Debug;
+    type WorkQueue: WorkQueue;
+    fn tell_value(&mut self, inst: &mut LLSudokuSolverInst<Self::Mask, Self::Count>, indices: CellIndices, val: SudokuValue, sudoku: &mut Sudoku, work_q: &mut Self::WorkQueue) -> Result<(), ()> {
         self.force_set_index(inst, FlatIndex::from(indices), val, sudoku, work_q)
     }
 
-    fn force_set_index(&mut self, inst: &mut LLSudokuSolverInst, i: FlatIndex, val: SudokuValue, sudoku: &mut Sudoku, work_q: &mut WorkQueue<u16>) -> Result<(), ()>;
-    fn process_index(&mut self, inst: &mut LLSudokuSolverInst, i: FlatIndex, sudoku: &mut Sudoku, work_q: &mut WorkQueue<u16>) -> Result<(), ()>;
+    fn force_set_index(&mut self, inst: &mut LLSudokuSolverInst<Self::Mask, Self::Count>, i: FlatIndex, val: SudokuValue, sudoku: &mut Sudoku, work_q: &mut Self::WorkQueue) -> Result<(), ()>;
+    fn process_index(&mut self, inst: &mut LLSudokuSolverInst<Self::Mask, Self::Count>, i: FlatIndex, sudoku: &mut Sudoku, work_q: &mut Self::WorkQueue) -> Result<(), ()>;
 }
 
 mod indices {
-    use std::num::{NonZeroI32, NonZeroU8};
+    use std::num::NonZeroU8;
+
     macro_rules! decl_index {
         ($name: ident, 0..$range: literal) => {
             #[derive(Copy, Clone, Eq, PartialEq, Debug)]

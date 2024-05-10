@@ -5,21 +5,21 @@
 
 extern crate core;
 
+use std::str::FromStr;
+
+/*#[cfg(all(target_arch = "x86_64", target_feature = "sse", target_feature = "avx", target_feature = "avx2", target_feature = "avx512f", target_feature = "avx512bw", target_feature = "avx512vl"))]
+type DefaultSolver = solver_base::LLGeneralSudokuSolver<solver_avx512::Avx512SudokuSolverImpl>;
+#[cfg(not(all(target_arch = "x86_64", target_feature = "sse", target_feature = "avx", target_feature = "avx2", target_feature = "avx512f", target_feature = "avx512bw", target_feature = "avx512vl")))]
+ */
+type DefaultSolver = solver_base::LLGeneralSudokuSolver<solver_full_loop::SolverFullLoop>;
+
+use crate::solver_base::{CellIndex, CellIndices, FlatIndex, GeneralSudokuSolver, Indices, LLSudokuSolverImpl, SudokuValue};
+
 #[cfg(all(target_arch = "x86_64", target_feature = "sse", target_feature = "avx", target_feature = "avx2", target_feature = "avx512f", target_feature = "avx512bw", target_feature = "avx512vl"))]
 mod solver_avx512;
 mod solver_base;
-mod solver_simple;
 mod work_queue;
-
-#[cfg(all(target_arch = "x86_64", target_feature = "sse", target_feature = "avx", target_feature = "avx2", target_feature = "avx512f", target_feature = "avx512bw", target_feature = "avx512vl"))]
-use solver_avx512::Avx512SudokuSolver as DefaultSolver;
-#[cfg(not(all(target_arch = "x86_64", target_feature = "sse", target_feature = "avx", target_feature = "avx2", target_feature = "avx512f", target_feature = "avx512bw", target_feature = "avx512vl")))]
-use solver_simple::SimpleSolver as DefaultSolver;
-use std::str::FromStr;
-
-use solver_base::LLSudokuSolverInst;
-use crate::solver_base::{CellIndex, CellIndices, FlatIndex, GeneralSudokuSolver, Indices, LLSudokuSolverImpl, SudokuValue};
-
+mod solver_full_loop;
 
 pub struct Sudoku {
     content: Box<[Option<SudokuValue>; 81]>
@@ -79,17 +79,21 @@ fn main() {
         .map(|((l, c), v)| ((CellIndex::new(l as u8).unwrap(), CellIndex::new(c as u8).unwrap()), v))
         .map(|(c, v)| (c, SudokuValue::new_1based(u8::from_str(v).expect("error")).unwrap()))
         .collect();
-    dbg!(given1.len());
+    let start = std::time::Instant::now();
     let mut solv = DefaultSolver::new();
     for ((l, c), v) in given1 {
         let res = solv.give_val(Indices { row: l, column: c }, v);
+        if (solv.work_queue.0 >> 6) & 1 > 0  {
+            solv.solver_inst.debug_print();
+            panic!("{:0b}", solv.work_queue.0);
+        }
         if let Err(_) = res {
             eprintln!("sudoku unsolvable:!");
-            solv.give_val(Indices { row: l, column: c }, v);
             return;
         }
     }
     let sudoku = solv.run();
+    dbg!(start.elapsed());
     println!("{sudoku}");
     check_sudoku(&sudoku);
     println!("Hello, world!");
@@ -125,11 +129,6 @@ fn check_sudoku(sudoku: &Sudoku) {
             for i in 0..9 {
                 for j in 0..i {
                     assert_ne!(sudoku[qis[i]], sudoku[qis[j]]);
-                }
-            }
-            for a1 in (q1..(q1 + 3)) {
-                for a2 in q2..(q2 + 3) {
-
                 }
             }
         }

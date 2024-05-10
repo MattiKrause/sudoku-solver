@@ -3,10 +3,8 @@
 use std::arch::x86_64::*;
 use std::mem::MaybeUninit;
 
-use crate::solver_avx512::dbg_dmp::DbgDmp;
-use crate::solver_base::{CellIndices, FlatIndex, FlatQuadrantIndex, get_quad_offset, LLGeneralSudokuSolver, LLSudokuSolverImpl, LLSudokuSolverInst, QuadrantIndices, SudokuValue};
+use crate::solver_base::{CellIndices, FlatIndex, FlatQuadrantIndex, get_quad_offset, LLGeneralSudokuSolver, LLSudokuSolverImpl, QuadrantIndices, SudokuValue};
 use crate::Sudoku;
-use crate::work_queue::WorkQueue;
 
 use self::util::*;
 
@@ -26,13 +24,17 @@ mod util;
 // 3. The counts for all the affected quadrants are updated
 // 4. if the count reaches 1, then the quadrant is investigated for the cell which can still contain the value, that cell is then added to the work queue
 
+type LLSudokuSolverInst = crate::solver_base::LLSudokuSolverInst<i32, i32>;
+type ListWorkQueue = crate::work_queue::ListWorkQueue<u16, 81>;
 
+#[allow(unused_macros)]
 macro_rules! str_vec {
     ($vec:expr, $n: ident, $t: ident) => {
-        let $n = $vec.dmp_arr();
+        let $n = dbg_dmp::DbgDmp::dmp_arr($vec);
         let _: &[$t] = &$n;
     };
 }
+#[allow(unused_macros)]
 macro_rules! dbg_vec {
     ($vec: ident, $t: ident) => {
         str_vec!($vec, x, $t);
@@ -46,6 +48,7 @@ macro_rules! dbg_vec {
         dbg_vec!($vec, i32)
     }
 }
+#[allow(unused_macros)]
 macro_rules! dbg_vec_bin {
     ($vec: expr, $t: ident) => {
         str_vec!($vec, x, $t);
@@ -57,7 +60,7 @@ macro_rules! dbg_vec_bin {
 
 /// Find all cells whose set size is 1 and whose value has changed and add them to the work queue
 /// returns a mask of all the elements whose value changed
-unsafe fn detect_set_size_1(old: I32x16, new: I32x16, idx: I32x16, write_to: &mut WorkQueue<u16>) -> u16 {
+unsafe fn detect_set_size_1(old: I32x16, new: I32x16, idx: I32x16, write_to: &mut ListWorkQueue) -> u16 {
     //check if vals changed
     let changed: u16 = _mm512_cmp_epi32_mask::<_MM_CMPINT_NE>(old, new);
     let set_size = _mm512_popcnt_epi32(new);
@@ -73,7 +76,7 @@ unsafe fn detect_set_size_1(old: I32x16, new: I32x16, idx: I32x16, write_to: &mu
 /// removes the value from the sets with the given indices using the remove mask
 /// Then adds the cells whose set size has reached 1 to the work queue
 /// Returns a mask of the elements whose value has changed
-unsafe fn remove_from_set_x16(src: &mut [i32; 81], idx: IndexI32x16, remove_mask: I32x16, work_q: &mut WorkQueue<u16>) -> u16 {
+unsafe fn remove_from_set_x16(src: &mut [i32; 81], idx: IndexI32x16, remove_mask: I32x16, work_q: &mut ListWorkQueue) -> u16 {
     #[cfg(debug_assertions)]
     {
         validate_cross_indices(idx);
@@ -89,14 +92,14 @@ unsafe fn remove_from_set_x16(src: &mut [i32; 81], idx: IndexI32x16, remove_mask
 }
 
 /// like [remove_from_set_x16] just for 9 items
-unsafe fn remove_from_set_x9(src: &mut [i32; 81], idx: IndexI32x9, remove_mask: I32x9, work_queue: &mut WorkQueue<u16>) -> u16 {
+unsafe fn remove_from_set_x9(src: &mut [i32; 81], idx: IndexI32x9, remove_mask: I32x9, work_queue: &mut ListWorkQueue) -> u16 {
     let vals = gather_i32x9(src, idx);
     let vals_new = _mm512_mask_and_epi32(vals, 0b111_111_111, vals, remove_mask);
     scatter_i32x9(src, idx, vals_new);
     detect_set_size_1(vals, vals_new, idx, work_queue)
 }
 
-unsafe fn mask_current_quadrant(quad_offset: FlatIndex, remove_mask: I32x16, content: &mut [i32; 81], quad_i: IndexI32x9, work_q: &mut WorkQueue<u16>) {
+unsafe fn mask_current_quadrant(quad_offset: FlatIndex, remove_mask: I32x16, content: &mut [i32; 81], quad_i: IndexI32x9, work_q: &mut ListWorkQueue) {
     let quad_off = splat_i32x16(i32::from(quad_offset.get()));
     let cur_quad: IndexI32x9 = _mm512_add_epi32(quad_i, quad_off);
     let _ = remove_from_set_x9(content, cur_quad, remove_mask, work_q);
@@ -161,7 +164,7 @@ unsafe fn adjust_pos_counts(cell_indices: CellIndices, indices_with_change_mask:
     decrease_num_count(indices_with_change_mask, mis_i_both, num_counts, cnt_idx)
 }
 
-unsafe fn add_one_count_to_q(one_count_i: &[i32], content: &mut [i32; 81], rem_mask: I32x16, quad_i: IndexI32x9, work_q: &mut WorkQueue<u16>)  {
+unsafe fn add_one_count_to_q(one_count_i: &[i32], content: &mut [i32; 81], rem_mask: I32x16, quad_i: IndexI32x9, work_q: &mut ListWorkQueue)  {
     //while instead of for to prevent strange error
     for qi in one_count_i {
         debug_assert!(*qi >= 0, "index {qi} is negative");
@@ -171,7 +174,7 @@ unsafe fn add_one_count_to_q(one_count_i: &[i32], content: &mut [i32; 81], rem_m
         let cur_quad = _mm512_add_epi32(quad_i, quad_off);
         let ind = find_pos_in_one_quad(rem_mask, content, cur_quad);
         debug_assert!(u16::try_from(ind).is_ok(), "{qi:?} is not a i32");
-        work_q.push(ind as u16);
+        work_q.push_unchecked(ind as u16);
     }
 }
 
@@ -194,24 +197,24 @@ fn all_one_count_i_are_one_count(oci: &[i32], counts: &[i32]) -> bool {
     oci.iter().map(|i| counts[*i as usize]).all(|c| c==1)
 }
 
-unsafe fn check_set(inst: &mut LLSudokuSolverInst, i: FlatIndex, value: SudokuValue, work_q: &mut WorkQueue<u16>) {
+unsafe fn check_set(inst: &mut LLSudokuSolverInst, i: FlatIndex, value: SudokuValue, work_q: &mut ListWorkQueue) {
     let cell_indices = CellIndices::from(i);
     let quad_indices = QuadrantIndices::from(cell_indices);
     let quad_index = FlatQuadrantIndex::from(quad_indices);
-    inst.num_counts[value.as_0based_idx()][quad_index.as_idx()] = 0;
+    inst.num_counts_mut()[value.as_0based_idx()][quad_index.as_idx()] = 0;
     let rem_mask = splat_i32x16(!i32::from(value.as_mask_0based()));
 
     let quadrant_offset = get_quad_offset(quad_indices);
     let quad_i = load_quad_indices();
-    mask_current_quadrant(quadrant_offset, rem_mask, &mut inst.content, quad_i, work_q);
+    mask_current_quadrant(quadrant_offset, rem_mask, inst.content_mut(), quad_i, work_q);
 
     let lane_i = compute_lane_indices(cell_indices);
     // indices_with_change contains a mask of the indices whose value has been changed
-    let indices_with_change = remove_from_set_x16(&mut inst.content, lane_i, rem_mask, work_q);
+    let indices_with_change = remove_from_set_x16(inst.content_mut(), lane_i, rem_mask, work_q);
 
-    let (one_count_i, oci_len) = adjust_pos_counts(cell_indices, indices_with_change, &mut inst.num_counts[value.as_0based_idx()]);
-    debug_assert!(all_one_count_i_are_one_count(&one_count_i[0..(oci_len as usize)], &inst.num_counts[value.as_0based_idx()]));
-    add_one_count_to_q(&one_count_i[..(oci_len as usize)], &mut inst.content, rem_mask, quad_i, work_q);
+    let (one_count_i, oci_len) = adjust_pos_counts(cell_indices, indices_with_change, &mut inst.num_counts_mut()[value.as_0based_idx()]);
+    debug_assert!(all_one_count_i_are_one_count(&one_count_i[0..(oci_len as usize)], &inst.num_counts()[value.as_0based_idx()]));
+    add_one_count_to_q(&one_count_i[..(oci_len as usize)], inst.content_mut(), rem_mask, quad_i, work_q);
 }
 
 pub type Avx512SudokuSolver = LLGeneralSudokuSolver<Avx512SudokuSolverImpl>;
@@ -223,29 +226,34 @@ impl Default for Avx512SudokuSolverImpl {
 }
 
 impl LLSudokuSolverImpl for Avx512SudokuSolverImpl {
-    fn force_set_index(&mut self, inst: &mut LLSudokuSolverInst, i: FlatIndex, val: SudokuValue, sudoku: &mut Sudoku, work_q: &mut WorkQueue<u16>) -> Result<(), ()> {
+    type Mask = i32;
+    type Count = i32;
+    type WorkQueue = ListWorkQueue;
+
+    fn force_set_index(&mut self, inst: &mut LLSudokuSolverInst, i: FlatIndex, val: SudokuValue, sudoku: &mut Sudoku, work_q: &mut ListWorkQueue) -> Result<(), ()> {
         let new_content = i32::from(val.as_mask_0based());
-        if inst.content[i.as_idx()] & new_content == 0 {
+        if inst.content()[i.as_idx()] & new_content == 0 {
             return Err(());
         }
         unsafe {
             let quad_index = FlatQuadrantIndex::from(QuadrantIndices::from(CellIndices::from(i)));
+            let remaining_mask = (inst.content()[i.as_idx()] ^ new_content) as u16;
             force_dec_num_count(
-                &mut inst.num_counts,
-                (inst.content[i.as_idx()] ^ new_content) as u16,
+                inst.num_counts_mut(),
+                remaining_mask,
                 quad_index
             );
         }
 
 
-        inst.content[i.as_idx()] = new_content;
+        inst.content_mut()[i.as_idx()] = new_content;
         self.process_index(inst, i, sudoku, work_q)
     }
-    fn process_index(&mut self, inst: &mut LLSudokuSolverInst, i: FlatIndex, sudoku: &mut Sudoku, work_q: &mut WorkQueue<u16>) -> Result<(), ()> {
-        let val_set = inst.content[i.as_idx()];
+    fn process_index(&mut self, inst: &mut LLSudokuSolverInst, i: FlatIndex, sudoku: &mut Sudoku, work_q: &mut ListWorkQueue) -> Result<(), ()> {
+        let val_set = inst.content()[i.as_idx()];
         let value = val_set.trailing_zeros();
         let value = SudokuValue::new_0based(u8::try_from(value).map_err(|_|())?).ok_or(())?;
-        inst.content[i.as_idx()] = 0;
+        inst.content_mut()[i.as_idx()] = 0;
         let old_len = work_q.len();
         sudoku[i] = Some(value);
         let res = unsafe {

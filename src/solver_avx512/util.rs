@@ -45,10 +45,6 @@ pub unsafe fn load_quad_indices() -> IndexI32x9 {
     _mm512_maskz_loadu_epi32(0b111_111_111, QUAD_INDEX.as_ptr())
 }
 
-pub fn comp_rem_mask(val: i32) ->  i32 {
-    !(1 << val)
-}
-
 /// accumulate the first 6 triplets and pull the results into the first 6 slots.
 /// The numbers should be 8 bit
 pub unsafe fn accumulate_triplets(mut vals: __m256i) -> __m256i {
