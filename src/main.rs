@@ -11,7 +11,7 @@ use std::str::FromStr;
 type DefaultSolver = solver_base::LLGeneralSudokuSolver<solver_avx512::Avx512SudokuSolverImpl>;
 #[cfg(not(all(target_arch = "x86_64", target_feature = "sse", target_feature = "avx", target_feature = "avx2", target_feature = "avx512f", target_feature = "avx512bw", target_feature = "avx512vl")))]
  */
-type DefaultSolver = solver_base::LLGeneralSudokuSolver<solver_full_loop::SolverFullLoop>;
+type DefaultSolver = solver_full_loop::SolverFullLoop;
 
 use crate::solver_base::{CellIndex, CellIndices, FlatIndex, GeneralSudokuSolver, Indices, LLSudokuSolverImpl, SudokuValue};
 
@@ -57,7 +57,7 @@ impl std::fmt::Display for Sudoku {
                 let index = usize::from(index);
                 let value = self.content[index];
                 match value {
-                    None => write!(f, "/")?,
+                    None => write!(f, "-")?,
                     Some(v) => std::fmt::Display::fmt(&v.get_1based(), f)?
                 }
             }
@@ -69,6 +69,24 @@ impl std::fmt::Display for Sudoku {
 
 fn main() {
     let as_text = include_str!("../sudokus/s4.txt");
+
+    /*let given: Vec<_> = as_text
+        .lines()
+        .enumerate()
+        .flat_map(|(r, l)| l.chars().enumerate().map(move |(c, v)| ((r, c), v)))
+        .filter(|(_, v)| *v != '-')
+        .map(|(pos, v)| {
+            let mut str_buf = [0u8; 4];
+            let str_buf = v.encode_utf8(&mut str_buf);
+            (pos, u8::from_str(str_buf).ok().and_then(SudokuValue::new_1based).unwrap_or_else(|| panic!("invalid sudoku index {v}")))
+        })
+        .map(|((r, c), v)| {
+            let row = u8::try_from(r).ok().and_then(CellIndex::new).expect("invalid row index");
+            let column= u8::try_from(c).ok().and_then(CellIndex::new).expect("invalid column index");
+            (CellIndices { row, column }, v)
+        })
+        .collect::<Vec<_>>();*/
+
     let given1: Vec<_> = as_text
         .lines()
         .map(|l| l.split('\t').map(|l| l.trim()))
@@ -78,15 +96,12 @@ fn main() {
         .filter(|(_, v)| !v.is_empty())
         .map(|((l, c), v)| ((CellIndex::new(l as u8).unwrap(), CellIndex::new(c as u8).unwrap()), v))
         .map(|(c, v)| (c, SudokuValue::new_1based(u8::from_str(v).expect("error")).unwrap()))
+        .map(|((row, column), v)| (CellIndices { row, column }, v))
         .collect();
     let start = std::time::Instant::now();
     let mut solv = DefaultSolver::new();
-    for ((l, c), v) in given1 {
-        let res = solv.give_val(Indices { row: l, column: c }, v);
-        if (solv.work_queue.0 >> 6) & 1 > 0  {
-            solv.solver_inst.debug_print();
-            panic!("{:0b}", solv.work_queue.0);
-        }
+    for (idx, v) in given1 {
+        let res = solv.give_val(idx, v);
         if let Err(_) = res {
             eprintln!("sudoku unsolvable:!");
             return;

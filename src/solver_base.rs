@@ -92,9 +92,10 @@ impl <T: LLSudokuSolverImpl + Default> GeneralSudokuSolver for LLGeneralSudokuSo
     fn run(mut self) -> Sudoku {
         while let Some(rem) = self.work_queue.pop() {
             let res = self.base_impl.process_index(&mut self.solver_inst, rem, &mut self.sudoku, &mut self.work_queue);
+
             if let Err(_) = res {
+
                 self.solver_inst.debug_print();
-                dbg!(self.sudoku[FlatIndex::new(67).unwrap()]);
                 // row 8/cell 5
                 return self.sudoku;
             }
