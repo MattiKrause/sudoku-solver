@@ -7,16 +7,10 @@ extern crate core;
 
 use std::str::FromStr;
 
-/*#[cfg(all(target_arch = "x86_64", target_feature = "sse", target_feature = "avx", target_feature = "avx2", target_feature = "avx512f", target_feature = "avx512bw", target_feature = "avx512vl"))]
-type DefaultSolver = solver_base::LLGeneralSudokuSolver<solver_avx512::Avx512SudokuSolverImpl>;
-#[cfg(not(all(target_arch = "x86_64", target_feature = "sse", target_feature = "avx", target_feature = "avx2", target_feature = "avx512f", target_feature = "avx512bw", target_feature = "avx512vl")))]
- */
 type DefaultSolver = solver_full_loop::SolverFullLoop;
 
 use crate::solver_base::{CellIndex, CellIndices, FlatIndex, GeneralSudokuSolver, Indices, LLSudokuSolverImpl, SudokuValue};
 
-#[cfg(all(target_arch = "x86_64", target_feature = "sse", target_feature = "avx", target_feature = "avx2", target_feature = "avx512f", target_feature = "avx512bw", target_feature = "avx512vl"))]
-mod solver_avx512;
 mod solver_base;
 mod work_queue;
 mod solver_full_loop;
