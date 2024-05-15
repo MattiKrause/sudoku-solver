@@ -1,3 +1,5 @@
+#![warn(clippy::pedantic)]
+
 #![feature(stdsimd)]
 #![feature(concat_idents)]
 #![feature(slice_flatten)]
@@ -5,13 +7,11 @@
 
 extern crate core;
 
-use std::io::Write;
-use std::str::FromStr;
 
 pub use solver_base::{CellIndex, CellIndices, FlatIndex, SudokuValue};
 pub use sudoku::Sudoku;
 
-use crate::solver_base::{GeneralSudokuSolver, GiveValError, LLSudokuSolverImpl};
+use crate::solver_base::{GeneralSudokuSolver, GiveValError};
 
 type DefaultSolver = solver_full_loop::SolverFullLoop;
 
@@ -19,6 +19,7 @@ mod solver_base;
 mod work_queue;
 mod solver_full_loop;
 mod sudoku;
+
 
 pub enum InvalidSudokuError {
     PositionGivenTwice(FlatIndex),
@@ -42,10 +43,15 @@ pub fn solve(given: &[(FlatIndex, SudokuValue)]) -> Result<Sudoku, SudokuSolveEr
             return Err(SudokuSolveError::InvalidSudoku(invalid_err, solver.into_current_solved_state()))
         }
     }
-    let solved = solver.run();
-    solved.map_err(SudokuSolveError::SudokuHasNotSolution)
+    let solver_result = solver.run();
+    #[cfg(debug_assertions)]
+    if let Ok(s) = &solver_result {
+        check_sudoku(s);
+    }
+    solver_result.map_err(SudokuSolveError::SudokuHasNotSolution)
 }
 
+#[cfg(debug_assertions)]
 fn check_sudoku(sudoku: &Sudoku) {
     for i in 0..81 {
         sudoku[FlatIndex::checked_new(i)].unwrap();

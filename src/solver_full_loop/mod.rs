@@ -1,14 +1,12 @@
-mod gen_mask;
-
-use std::hint::unreachable_unchecked;
 use std::simd::{SimdPartialOrd, ToBitMask};
 
-use crate::solver_base::{CellIndex, CellIndices, FlatIndex, FlatQuadrantIndex, GeneralSudokuSolver, get_quad_offset, GiveValError, Indices, QuadrantIndex, QuadrantIndices, SudokuValue};
+use crate::solver_base::{FlatIndex, GeneralSudokuSolver, GiveValError, SudokuValue};
 use crate::solver_full_loop::gen_mask::generate_mask;
 use crate::Sudoku;
 use crate::work_queue::{BitMaskWorkQueue, WorkQueue};
 
-type LLSudokuSolverInst = crate::solver_base::LLSudokuSolverInst<u16, u8>;
+mod gen_mask;
+
 type Board = [u16; 96];
 
 
@@ -18,6 +16,8 @@ fn check_set1(content: &mut Board, i: FlatIndex, value: SudokuValue, work_q: &mu
     let remove_mask = !value.as_mask_0based();
 
     {
+        // truncating is the goal of this
+        #[allow(clippy::cast_possible_truncation)]
         let data_lo = active_mask as u64;
         let data = std::simd::u16x64::from_slice(&content[0..64]);
         let mask_out = std::simd::Simd::splat(remove_mask);
@@ -30,10 +30,12 @@ fn check_set1(content: &mut Board, i: FlatIndex, value: SudokuValue, work_q: &mu
             let edi = new_data ^ eax;
             edi.simd_gt(eax).to_bitmask()
         };
-        work_q.0 |= is_one as u128;
+        work_q.0 |= u128::from(is_one);
     }
 
     {
+        // truncating is the goal of this
+        #[allow(clippy::cast_possible_truncation)]
         let data_high = (active_mask >> 64) as u32;
         let data = std::simd::u16x32::from_slice(&content[64..96]);
         let mask_out = std::simd::Simd::splat(remove_mask);
@@ -46,7 +48,7 @@ fn check_set1(content: &mut Board, i: FlatIndex, value: SudokuValue, work_q: &mu
             let edi = new_data ^ eax;
             edi.simd_gt(eax).to_bitmask()
         };
-        work_q.0 |= (is_one as u128) << 64;
+        work_q.0 |= u128::from(is_one) << 64;
     }
 }
 
@@ -73,14 +75,10 @@ pub fn seek_quad_single_value(board: &mut Board, wq: &mut u128) {
             let m = board[idx + o];
             let m2 = m & e1;
             board[idx + o] = if m2 > 0 { m2 } else { m };
-            *wq |= ((m2 > 0) as u128) << (idx + o);
+            *wq |= (u128::from(m2 > 0)) << (idx + o);
         }
     }
 }
-
-
-#[derive(Default)]
-pub struct SolverFullLoopImpl;
 
 pub struct SolverFullLoop {
     sudoku: Sudoku,
@@ -104,7 +102,7 @@ fn force_set_index(content: &mut Board, i: FlatIndex, val: SudokuValue, sudoku: 
     if content[i.as_idx()] & new_content == 0 {
         return Err(GiveValError::ValueDoesNotFitThere);
     }
-    work_q.0 &= !(1u128 << i.as_idx());
+    work_q.remove(i);
     set_value(content, val, i, sudoku, work_q);
     Ok(())
 }
@@ -143,7 +141,7 @@ impl GeneralSudokuSolver for SolverFullLoop {
         while self.filled_pos < 81 {
             while let Some(idx) = self.work_queue.pop() {
                 let res = process_index(&mut self.content, idx, &mut self.sudoku, &mut self.work_queue);
-                if let Err(_) = res {
+                if let Err(()) = res {
                     unreachable!();
                     // row 8/cell 5
 
@@ -159,9 +157,9 @@ impl GeneralSudokuSolver for SolverFullLoop {
             }
         }
         if self.filled_pos < 81 {
-            return Err(self.sudoku)
+            Err(self.sudoku)
         } else {
-            return Ok(self.sudoku)
+            Ok(self.sudoku)
         }
     }
 }

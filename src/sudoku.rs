@@ -4,13 +4,21 @@ pub struct Sudoku {
     content: Box<[Option<SudokuValue>; 81]>
 }
 
+impl Default for Sudoku {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Sudoku {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             content: Box::new([None; 81])
         }
     }
 
+    #[must_use]
     pub fn get_value(&self, indices: CellIndices) -> Option<SudokuValue> {
         self.content[FlatIndex::from(indices).as_idx()]
     }

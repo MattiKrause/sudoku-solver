@@ -1,65 +1,6 @@
-use std::ops::IndexMut;
-
 pub use indices::*;
 
 use crate::Sudoku;
-use crate::work_queue::WorkQueue;
-
-pub struct LLSudokuSolverInst<MASK, COUNT>{
-    content: Box<[MASK; 96]>,
-    //outer: number, inner: 9x9 area
-    num_counts: Box<[[COUNT; 9]; 9]>,
-}
-
-impl <MASK: From<u16> + Copy, COUNT: From<u8> + Copy> LLSudokuSolverInst<MASK, COUNT> {
-    pub fn new() -> Self {
-        Self {
-            content: Box::new([MASK::from(0b1_1111_1111); 96]),
-            num_counts: Box::new([[COUNT::from(9); 9]; 9]),
-        }
-    }
-
-    pub fn content(&self) -> &[MASK; 81] {
-        self.content[0..81].try_into().unwrap()
-    }
-    pub fn content_aligned(&self) -> &[MASK; 96] {
-        &self.content
-    }
-    pub fn content_mut(&mut self) -> &mut [MASK; 81] {
-        self.content.index_mut(..81).try_into().unwrap()
-    }
-    pub fn content_aligned_mut(&mut self) -> &mut [MASK; 96] {
-        &mut self.content
-    }
-    pub fn num_counts(&self) -> &[[COUNT; 9]; 9] {
-        &self.num_counts
-    }
-    pub fn num_counts_mut(&mut self) -> &mut [[COUNT; 9]; 9] {
-        &mut self.num_counts
-    }
-}
-
-impl <MASK: Copy + std::fmt::Debug, COUNT> LLSudokuSolverInst<MASK, COUNT> where u16: TryFrom<MASK>{
-    pub fn debug_print(&self) {
-        for i in 0..9 {
-            for j in 0..9 {
-                let mask = self.content.as_ref()[i * 9 + j];
-                let Ok(mask) = u16::try_from(mask) else {
-                    panic!("{mask:?} is not a valid mask!")
-                };
-                for v in 0..9 {
-                    if (mask >> v) & 1 > 0 {
-                        print!("{}", v + 1);
-                    } else {
-                        print!("-")
-                    }
-                }
-                print!("  ");
-            }
-            println!();
-        }
-    }
-}
 
 pub enum GiveValError  {
     PositionAlreadySet, ValueDoesNotFitThere
@@ -72,62 +13,6 @@ pub trait GeneralSudokuSolver {
     fn run(self) -> Result<Sudoku, Sudoku>;
 }
 
-
-
-pub struct LLGeneralSudokuSolver<T: LLSudokuSolverImpl> {
-    base_impl: T,
-    pub solver_inst: LLSudokuSolverInst<T::Mask, T::Count>,
-    sudoku: Sudoku,
-    pub work_queue: T::WorkQueue
-}
-
-impl <T: LLSudokuSolverImpl + Default> GeneralSudokuSolver for LLGeneralSudokuSolver<T> where u16:TryFrom<T::Mask>{
-    fn new() -> Self {
-        Self {
-            base_impl: T::default(),
-            solver_inst: LLSudokuSolverInst::new() ,
-            sudoku: Sudoku::new(),
-            work_queue: T::WorkQueue::new()
-        }
-    }
-
-    fn give_val(&mut self, lc: FlatIndex, v: SudokuValue) -> Result<(), GiveValError> {
-        self.base_impl.tell_value(&mut self.solver_inst, lc, v, &mut self.sudoku, &mut self.work_queue)
-    }
-
-    fn into_current_solved_state(self) -> Sudoku {
-        self.sudoku
-    }
-
-    fn run(mut self) -> Result<Sudoku, Sudoku> {
-        while let Some(rem) = self.work_queue.pop() {
-            let res = self.base_impl.process_index(&mut self.solver_inst, rem, &mut self.sudoku, &mut self.work_queue);
-
-            if let Err(_) = res {
-                unreachable!();
-            }
-        }
-        for i in 0..81 {
-            if self.sudoku[FlatIndex::checked_new(i)].is_none() {
-                return Err(self.sudoku);
-            }
-        }
-        Ok(self.sudoku)
-    }
-}
-
-pub trait LLSudokuSolverImpl {
-    type Mask: From<u16> + Copy + std::fmt::Debug;
-    type Count: From<u8> + Copy + std::fmt::Debug;
-    type WorkQueue: WorkQueue;
-    fn tell_value(&mut self, inst: &mut LLSudokuSolverInst<Self::Mask, Self::Count>, indices: FlatIndex, val: SudokuValue, sudoku: &mut Sudoku, work_q: &mut Self::WorkQueue) -> Result<(), GiveValError> {
-        self.force_set_index(inst, indices, val, sudoku, work_q)
-    }
-
-    fn force_set_index(&mut self, inst: &mut LLSudokuSolverInst<Self::Mask, Self::Count>, i: FlatIndex, val: SudokuValue, sudoku: &mut Sudoku, work_q: &mut Self::WorkQueue) -> Result<(), GiveValError>;
-    fn process_index(&mut self, inst: &mut LLSudokuSolverInst<Self::Mask, Self::Count>, i: FlatIndex, sudoku: &mut Sudoku, work_q: &mut Self::WorkQueue) -> Result<(), ()>;
-}
-
 mod indices {
     use std::num::NonZeroU8;
 
@@ -137,6 +22,7 @@ mod indices {
             #[repr(transparent)]
             pub struct $name(u8);
             impl $name {
+                #[must_use]
                 pub const fn new(i: u8) -> Option<Self> {
                     if i < $range {
                         Some(Self(i))
@@ -144,6 +30,7 @@ mod indices {
                         None
                     }
                 }
+                #[must_use]
                 pub const fn checked_new(i: u8) -> Self {
                     let me = Self::new(i);
                     if let Some(me) = me {
@@ -152,6 +39,7 @@ mod indices {
                         panic!("invalid index")
                     }
                 }
+                #[must_use]
                 pub const fn get(&self) -> u8 {
                     if self.0 < $range {
                         self.0
@@ -160,6 +48,7 @@ mod indices {
                     }
                 }
 
+                #[must_use]
                 pub const fn as_idx(self) -> usize {
                     self.get()  as usize
                 }
@@ -181,6 +70,7 @@ mod indices {
     pub struct SudokuValue(NonZeroU8);
 
     impl SudokuValue {
+        #[must_use]
         pub const fn new_1based(v: u8) -> Option<Self> {
             if 1 <= v && v <= 9 {
                 let Some(v) = NonZeroU8::new(v) else { return None };
@@ -189,24 +79,33 @@ mod indices {
                 None
             }
         }
+
+        #[must_use]
         pub const fn new_0based(v: u8) -> Option<Self> {
             // only issue is v= 255, in that case v + 1 = 0 which is still not accepted
             let v = v.wrapping_add(1);
             Self::new_1based(v)
         }
+        #[must_use]
         pub const fn get_1based(self) -> NonZeroU8 {
             if 1 <= self.0.get() && self.0.get() <= 9 {
-                return self.0
+                self.0
             } else {
                 unsafe { std::hint::unreachable_unchecked() }
             }
         }
+
+        #[must_use]
         pub const fn get_0based(self) -> u8 {
-            return self.get_1based().get() - 1;
+            self.get_1based().get() - 1
         }
+
+        #[must_use]
         pub const fn as_0based_idx(self) -> usize {
             self.get_0based() as usize
         }
+
+        #[must_use]
         pub const fn as_mask_0based(self) -> u16 {
             1 << (self.get_0based() as u16)
         }
@@ -224,53 +123,56 @@ mod indices {
         pub column: T
     }
 
+    #[allow(clippy::module_name_repetitions)]
     pub type CellIndices = Indices<CellIndex>;
+    #[allow(clippy::module_name_repetitions)]
     pub type QuadrantIndices = Indices<QuadrantIndex>;
 
-    impl From<FlatIndex> for CellIndices {
-        fn from(value: FlatIndex) -> Self {
-            Indices {
-                row: CellIndex::new(value.get() / 9).unwrap(),
-                column: CellIndex::new(value.get() % 9).unwrap()
+    macro_rules! impl_from_and_const_fn {
+        ($(fn $fn_name: ident($var_name: ident: $from: ty) -> $to: ty $backing: block)*) => {
+            $(
+            pub const fn $fn_name($var_name: $from) -> $to $backing
+            impl From<$from> for $to {
+                fn from(value: $from) -> Self {
+                    $fn_name(value)
+                }
             }
-        }
-    }
-
-    impl From<CellIndices> for FlatIndex {
-        fn from(value: Indices<CellIndex>) -> Self {
-            FlatIndex::new(value.row.get() * 9 + value.column.get()).unwrap()
-        }
-    }
-
-    impl From<CellIndices> for QuadrantIndices {
-        fn from(value: Indices<CellIndex>) -> Self {
-            Indices {
-                row: QuadrantIndex::new(value.row.get() / 3).unwrap(),
-                column: QuadrantIndex::new(value.column.get() / 3).unwrap()
-            }
-        }
-    }
-
-    impl From<FlatQuadrantIndex> for QuadrantIndices {
-        fn from(value: FlatQuadrantIndex) -> Self {
-            Indices {
-                row: QuadrantIndex::new(value.get() / 3).unwrap(),
-                column: QuadrantIndex::new(value.get() % 3).unwrap(),
-            }
-        }
-    }
-
-    impl From<QuadrantIndices> for FlatQuadrantIndex {
-        fn from(value: Indices<QuadrantIndex>) -> Self {
-            FlatQuadrantIndex::new(value.row.get() * 3 + value.column.get()).unwrap()
-        }
-    }
-
-    pub fn get_quad_offset(indices: QuadrantIndices) -> FlatIndex {
-        let quadrant_start = Indices {
-            row: CellIndex::new(indices.row.get() * 3).unwrap(),
-            column: CellIndex::new(indices.column.get() * 3).unwrap(),
+            )*
         };
-        FlatIndex::from(quadrant_start)
+    }
+
+    impl_from_and_const_fn! {
+        fn cell_indices_from_flat_index(value: FlatIndex) -> CellIndices {
+            Indices {
+                row: CellIndex::checked_new(value.get() / 9),
+                column: CellIndex::checked_new(value.get() % 9)
+            }
+        }
+        fn flat_index_from_cell_indices(value: CellIndices) -> FlatIndex {
+            FlatIndex::checked_new(value.row.get() * 9 + value.column.get())
+        }
+        fn quadrant_indices_from_cell_indices(value: CellIndices) -> QuadrantIndices {
+            Indices {
+                row: QuadrantIndex::checked_new(value.row.get() / 3),
+                column: QuadrantIndex::checked_new(value.column.get() / 3)
+            }
+        }
+        fn quadrant_indices_from_flat_quadrant_index(value: FlatQuadrantIndex) -> QuadrantIndices {
+            Indices {
+                row: QuadrantIndex::checked_new(value.get() / 3),
+                column: QuadrantIndex::checked_new(value.get() % 3),
+            }
+        }
+        fn flat_quadrant_index_from_quadrant_indices(value: QuadrantIndices) -> FlatQuadrantIndex {
+            FlatQuadrantIndex::checked_new(value.row.get() * 3 + value.column.get())
+        }
+    }
+
+    pub const fn get_quad_offset(indices: QuadrantIndices) -> FlatIndex {
+        let quadrant_start = Indices {
+            row: CellIndex::checked_new(indices.row.get() * 3),
+            column: CellIndex::checked_new(indices.column.get() * 3),
+        };
+        flat_index_from_cell_indices(quadrant_start)
     }
 }
