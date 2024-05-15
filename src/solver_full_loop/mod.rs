@@ -1,20 +1,15 @@
-use std::simd::{ SimdPartialOrd, ToBitMask};
+mod gen_mask;
 
-use crate::solver_base::{CellIndices, FlatIndex, GeneralSudokuSolver, get_quad_offset, QuadrantIndices, SudokuValue};
+use std::simd::{SimdPartialOrd, ToBitMask};
+
+use crate::solver_base::{CellIndex, CellIndices, FlatIndex, FlatQuadrantIndex, GeneralSudokuSolver, get_quad_offset, Indices, QuadrantIndex, QuadrantIndices, SudokuValue};
+use crate::solver_full_loop::gen_mask::generate_mask;
 use crate::Sudoku;
 use crate::work_queue::{BitMaskWorkQueue, WorkQueue};
 
 type LLSudokuSolverInst = crate::solver_base::LLSudokuSolverInst<u16, u8>;
 type Board = [u16; 96];
 
-fn generate_mask(i: FlatIndex) -> u128{
-    static COLUMN_MASK: u128 = 0b111_111_111;
-    static ROW_MASK: u128 = (1u128 << (0 * 9)) | (1 << (1 * 9)) | (1 << (2 * 9)) | (1 << (3 * 9)) | (1 << (4 * 9)) | (1 << (5 * 9)) | (1 << (6 * 9)) | (1 << (7 * 9)) | (1 << (8 * 9));
-    static QUADRANT_MASK: u128 = 0b111u128 | (0b111 << 9) | (0b111 << 2 * 9);
-    let cell_indices = CellIndices::from(i);
-    let quadrant_offset = get_quad_offset(QuadrantIndices::from(cell_indices));
-    (COLUMN_MASK << (cell_indices.row.get() * 9)) | (ROW_MASK << (cell_indices.column.get())) | (QUADRANT_MASK << quadrant_offset.get())
-}
 
 #[inline(never)]
 fn check_set1(content: &mut Board, i: FlatIndex, value: SudokuValue, work_q: &mut BitMaskWorkQueue) {
@@ -63,7 +58,7 @@ pub fn seek_quad_single_value(board: &mut Board, wq: &mut u128) {
         let mut l2 = 0;
         for o in offsets {
             if (idx + o) >= 81 {
-                unsafe {std::hint::unreachable_unchecked() }
+                unsafe { std::hint::unreachable_unchecked() }
             }
             let m = board[idx + o];
             l2 |= l1 & m;
@@ -72,7 +67,7 @@ pub fn seek_quad_single_value(board: &mut Board, wq: &mut u128) {
         let e1 = l1 & !l2;
         for o in offsets {
             if (idx + o) >= 81 {
-                unsafe {std::hint::unreachable_unchecked() }
+                unsafe { std::hint::unreachable_unchecked() }
             }
             let m = board[idx + o];
             let m2 = m & e1;
@@ -90,7 +85,7 @@ pub struct SolverFullLoop {
     sudoku: Sudoku,
     content: Box<[u16; 96]>,
     work_queue: BitMaskWorkQueue,
-    filled_pos: u8
+    filled_pos: u8,
 }
 
 #[inline(never)]
@@ -108,11 +103,12 @@ fn force_set_index(content: &mut Board, i: FlatIndex, val: SudokuValue, sudoku: 
     set_value(content, val, i, sudoku, work_q);
     Ok(())
 }
+
 #[inline(never)]
 fn process_index(content: &mut Board, i: FlatIndex, sudoku: &mut Sudoku, work_q: &mut BitMaskWorkQueue) -> Result<(), ()> {
     let val_set = content[i.as_idx()];
     let value = val_set.trailing_zeros();
-    let value = SudokuValue::new_0based(u8::try_from(value).map_err(|_|())?).ok_or(())?;
+    let value = SudokuValue::new_0based(u8::try_from(value).map_err(|_| ())?).ok_or(())?;
     debug_assert!(val_set == value.as_mask_0based(), "v: {value:?}, mask: {val_set:0b}");
     set_value(content, value, i, sudoku, work_q);
     Ok(())
@@ -145,7 +141,7 @@ impl GeneralSudokuSolver for SolverFullLoop {
                 self.filled_pos += 1;
             }
             if self.filled_pos >= 81 {
-                break
+                break;
             }
             seek_quad_single_value(&mut self.content, &mut self.work_queue.0);
             if self.work_queue.0 == 0 {

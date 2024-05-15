@@ -139,11 +139,9 @@ impl WorkQueue for BitMaskWorkQueue {
         }
         let next = self.0.trailing_zeros();
         self.0 ^= 1u128 << next;
-        let next = u8::try_from(next)
+        u8::try_from(next)
             .ok()
             .and_then(FlatIndex::new)
-            .unwrap_or_else(|| panic!("{next} is not a flat index!"));
-        Some(next)
     }
 }
 

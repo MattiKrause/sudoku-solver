@@ -132,6 +132,14 @@ mod indices {
                         None
                     }
                 }
+                pub const fn checked_new(i: u8) -> Self {
+                    let me = Self::new(i);
+                    if let Some(me) = me {
+                        me
+                    } else {
+                        panic!("invalid index")
+                    }
+                }
                 pub const fn get(&self) -> u8 {
                     if self.0 < $range {
                         self.0
