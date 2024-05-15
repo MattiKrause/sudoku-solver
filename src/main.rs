@@ -5,11 +5,13 @@
 
 extern crate core;
 
+use std::fs::File;
 use std::str::FromStr;
 
 type DefaultSolver = solver_full_loop::SolverFullLoop;
 
 use crate::solver_base::{CellIndex, CellIndices, FlatIndex, GeneralSudokuSolver, Indices, LLSudokuSolverImpl, SudokuValue};
+use std::io::Write;
 
 mod solver_base;
 mod work_queue;
@@ -64,7 +66,7 @@ impl std::fmt::Display for Sudoku {
 fn main() {
     let as_text = include_str!("../sudokus/s4.txt");
 
-    /*let given: Vec<_> = as_text
+    let given: Vec<_> = as_text
         .lines()
         .enumerate()
         .flat_map(|(r, l)| l.chars().enumerate().map(move |(c, v)| ((r, c), v)))
@@ -79,22 +81,11 @@ fn main() {
             let column= u8::try_from(c).ok().and_then(CellIndex::new).expect("invalid column index");
             (CellIndices { row, column }, v)
         })
-        .collect::<Vec<_>>();*/
+        .collect::<Vec<_>>();
 
-    let given1: Vec<_> = as_text
-        .lines()
-        .map(|l| l.split('\t').map(|l| l.trim()))
-        .enumerate()
-        .map(|(l, ln)| ln.enumerate().map( move |(c, x)| ((l, c), x)))
-        .flatten()
-        .filter(|(_, v)| !v.is_empty())
-        .map(|((l, c), v)| ((CellIndex::new(l as u8).unwrap(), CellIndex::new(c as u8).unwrap()), v))
-        .map(|(c, v)| (c, SudokuValue::new_1based(u8::from_str(v).expect("error")).unwrap()))
-        .map(|((row, column), v)| (CellIndices { row, column }, v))
-        .collect();
     let start = std::time::Instant::now();
     let mut solv = DefaultSolver::new();
-    for (idx, v) in given1 {
+    for (idx, v) in given {
         let res = solv.give_val(idx, v);
         if let Err(_) = res {
             eprintln!("sudoku unsolvable:!");
@@ -105,7 +96,6 @@ fn main() {
     dbg!(start.elapsed());
     println!("{sudoku}");
     check_sudoku(&sudoku);
-    println!("Hello, world!");
 }
 
 fn check_sudoku(sudoku: &Sudoku) {
