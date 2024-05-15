@@ -14,7 +14,7 @@ pub trait GeneralSudokuSolver {
 }
 
 mod indices {
-    use std::num::NonZeroU8;
+    use core::num::NonZeroU8;
 
     macro_rules! decl_index {
         ($name: ident, 0..$range: literal) => {
@@ -44,7 +44,7 @@ mod indices {
                     if self.0 < $range {
                         self.0
                     } else {
-                        unsafe { std::hint::unreachable_unchecked() };
+                        unsafe { core::hint::unreachable_unchecked() };
                     }
                 }
 
@@ -53,9 +53,9 @@ mod indices {
                     self.get()  as usize
                 }
             }
-            impl std::fmt::Display for $name {
-                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    std::fmt::Display::fmt(&self.0, f)
+            impl core::fmt::Display for $name {
+                fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                    core::fmt::Display::fmt(&self.0, f)
                 }
             }
         };
@@ -91,7 +91,7 @@ mod indices {
             if 1 <= self.0.get() && self.0.get() <= 9 {
                 self.0
             } else {
-                unsafe { std::hint::unreachable_unchecked() }
+                unsafe { core::hint::unreachable_unchecked() }
             }
         }
 
@@ -111,9 +111,9 @@ mod indices {
         }
     }
 
-    impl std::fmt::Display for SudokuValue {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            std::fmt::Display::fmt(&self.get_1based().get(), f)
+    impl core::fmt::Display for SudokuValue {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            core::fmt::Display::fmt(&self.get_1based().get(), f)
         }
     }
 

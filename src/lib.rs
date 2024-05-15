@@ -5,6 +5,8 @@
 #![feature(slice_flatten)]
 #![feature(portable_simd)]
 
+#![no_std]
+
 extern crate core;
 
 

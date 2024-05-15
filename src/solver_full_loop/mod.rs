@@ -1,4 +1,4 @@
-use std::simd::{SimdPartialOrd, ToBitMask};
+use core::simd::{SimdPartialOrd, ToBitMask};
 
 use crate::solver_base::{FlatIndex, GeneralSudokuSolver, GiveValError, SudokuValue};
 use crate::solver_full_loop::gen_mask::generate_mask;
@@ -19,14 +19,14 @@ fn check_set1(content: &mut Board, i: FlatIndex, value: SudokuValue, work_q: &mu
         // truncating is the goal of this
         #[allow(clippy::cast_possible_truncation)]
         let data_lo = active_mask as u64;
-        let data = std::simd::u16x64::from_slice(&content[0..64]);
-        let mask_out = std::simd::Simd::splat(remove_mask);
-        let mask = std::simd::Mask::from_bitmask(data_lo);
+        let data = core::simd::u16x64::from_slice(&content[0..64]);
+        let mask_out = core::simd::Simd::splat(remove_mask);
+        let mask = core::simd::Mask::from_bitmask(data_lo);
         let new_data = mask.select(data & mask_out, data);
         new_data.copy_to_slice(&mut content[0..64]);
 
         let is_one = {
-            let eax = new_data - std::simd::Simd::splat(1);
+            let eax = new_data - core::simd::Simd::splat(1);
             let edi = new_data ^ eax;
             edi.simd_gt(eax).to_bitmask()
         };
@@ -37,14 +37,14 @@ fn check_set1(content: &mut Board, i: FlatIndex, value: SudokuValue, work_q: &mu
         // truncating is the goal of this
         #[allow(clippy::cast_possible_truncation)]
         let data_high = (active_mask >> 64) as u32;
-        let data = std::simd::u16x32::from_slice(&content[64..96]);
-        let mask_out = std::simd::Simd::splat(remove_mask);
-        let mask = std::simd::Mask::from_bitmask(data_high);
+        let data = core::simd::u16x32::from_slice(&content[64..96]);
+        let mask_out = core::simd::Simd::splat(remove_mask);
+        let mask = core::simd::Mask::from_bitmask(data_high);
         let new_data = mask.select(data & mask_out, data);
         new_data.copy_to_slice(&mut content[64..96]);
 
         let is_one = {
-            let eax = new_data - std::simd::Simd::splat(1);
+            let eax = new_data - core::simd::Simd::splat(1);
             let edi = new_data ^ eax;
             edi.simd_gt(eax).to_bitmask()
         };
@@ -61,7 +61,7 @@ pub fn seek_quad_single_value(board: &mut Board, wq: &mut u128) {
         let mut l2 = 0;
         for o in offsets {
             if (idx + o) >= 81 {
-                unsafe { std::hint::unreachable_unchecked() }
+                unsafe { core::hint::unreachable_unchecked() }
             }
             let m = board[idx + o];
             l2 |= l1 & m;
@@ -70,7 +70,7 @@ pub fn seek_quad_single_value(board: &mut Board, wq: &mut u128) {
         let e1 = l1 & !l2;
         for o in offsets {
             if (idx + o) >= 81 {
-                unsafe { std::hint::unreachable_unchecked() }
+                unsafe { core::hint::unreachable_unchecked() }
             }
             let m = board[idx + o];
             let m2 = m & e1;
@@ -82,7 +82,7 @@ pub fn seek_quad_single_value(board: &mut Board, wq: &mut u128) {
 
 pub struct SolverFullLoop {
     sudoku: Sudoku,
-    content: Box<Board>,
+    content: Board,
     work_queue: BitMaskWorkQueue,
     filled_pos: u8,
 }
@@ -121,7 +121,7 @@ impl GeneralSudokuSolver for SolverFullLoop {
     fn new() -> Self {
         Self {
             sudoku: Sudoku::new(),
-            content: Box::new([0b111_111_111; 96]),
+            content: [0b111_111_111; 96],
             work_queue: BitMaskWorkQueue(0),
             filled_pos: 0,
         }

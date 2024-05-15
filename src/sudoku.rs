@@ -1,7 +1,7 @@
 use crate::solver_base::{CellIndices, FlatIndex, SudokuValue};
 
 pub struct Sudoku {
-    content: Box<[Option<SudokuValue>; 81]>
+    content: [Option<SudokuValue>; 81]
 }
 
 impl Default for Sudoku {
@@ -14,7 +14,7 @@ impl Sudoku {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            content: Box::new([None; 81])
+            content: [None; 81]
         }
     }
 
@@ -24,7 +24,7 @@ impl Sudoku {
     }
 }
 
-impl std::ops::Index<CellIndices> for Sudoku {
+impl core::ops::Index<CellIndices> for Sudoku {
     type Output = Option<SudokuValue>;
 
     fn index(&self, index: CellIndices) -> &Self::Output {
@@ -32,20 +32,20 @@ impl std::ops::Index<CellIndices> for Sudoku {
     }
 }
 
-impl std::ops::Index<FlatIndex> for Sudoku {
+impl core::ops::Index<FlatIndex> for Sudoku {
     type Output = Option<SudokuValue>;
 
     fn index(&self, index: FlatIndex) -> &Self::Output {
         &self.content[index.as_idx()]
     }
 }
-impl std::ops::IndexMut<FlatIndex> for Sudoku {
+impl core::ops::IndexMut<FlatIndex> for Sudoku {
     fn index_mut(&mut self, index: FlatIndex) -> &mut Self::Output {
         &mut self.content[index.as_idx()]
     }
 }
-impl std::fmt::Display for Sudoku {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Sudoku {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         for row in 0..9 {
             for column in 0..9 {
                 let index: u8 = row  * 9 + column;
@@ -53,7 +53,7 @@ impl std::fmt::Display for Sudoku {
                 let value = self.content[index];
                 match value {
                     None => write!(f, "-")?,
-                    Some(v) => std::fmt::Display::fmt(&v.get_1based(), f)?
+                    Some(v) => core::fmt::Display::fmt(&v.get_1based(), f)?
                 }
             }
             if row != 8 {
