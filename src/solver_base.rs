@@ -1,4 +1,5 @@
 use std::ops::IndexMut;
+
 pub use indices::*;
 
 use crate::Sudoku;
@@ -60,10 +61,15 @@ impl <MASK: Copy + std::fmt::Debug, COUNT> LLSudokuSolverInst<MASK, COUNT> where
     }
 }
 
+pub enum GiveValError  {
+    PositionAlreadySet, ValueDoesNotFitThere
+}
+
 pub trait GeneralSudokuSolver {
     fn new() -> Self;
-    fn give_val(&mut self, lc: CellIndices, v: SudokuValue) -> Result<(), ()>;
-    fn run(self) -> Sudoku;
+    fn give_val(&mut self, lc: FlatIndex, v: SudokuValue) -> Result<(), GiveValError>;
+    fn into_current_solved_state(self) -> Sudoku;
+    fn run(self) -> Result<Sudoku, Sudoku>;
 }
 
 
@@ -85,22 +91,28 @@ impl <T: LLSudokuSolverImpl + Default> GeneralSudokuSolver for LLGeneralSudokuSo
         }
     }
 
-    fn give_val(&mut self, lc: CellIndices, v: SudokuValue) -> Result<(), ()> {
+    fn give_val(&mut self, lc: FlatIndex, v: SudokuValue) -> Result<(), GiveValError> {
         self.base_impl.tell_value(&mut self.solver_inst, lc, v, &mut self.sudoku, &mut self.work_queue)
     }
 
-    fn run(mut self) -> Sudoku {
+    fn into_current_solved_state(self) -> Sudoku {
+        self.sudoku
+    }
+
+    fn run(mut self) -> Result<Sudoku, Sudoku> {
         while let Some(rem) = self.work_queue.pop() {
             let res = self.base_impl.process_index(&mut self.solver_inst, rem, &mut self.sudoku, &mut self.work_queue);
 
             if let Err(_) = res {
-
-                self.solver_inst.debug_print();
-                // row 8/cell 5
-                return self.sudoku;
+                unreachable!();
             }
         }
-        self.sudoku
+        for i in 0..81 {
+            if self.sudoku[FlatIndex::checked_new(i)].is_none() {
+                return Err(self.sudoku);
+            }
+        }
+        Ok(self.sudoku)
     }
 }
 
@@ -108,11 +120,11 @@ pub trait LLSudokuSolverImpl {
     type Mask: From<u16> + Copy + std::fmt::Debug;
     type Count: From<u8> + Copy + std::fmt::Debug;
     type WorkQueue: WorkQueue;
-    fn tell_value(&mut self, inst: &mut LLSudokuSolverInst<Self::Mask, Self::Count>, indices: CellIndices, val: SudokuValue, sudoku: &mut Sudoku, work_q: &mut Self::WorkQueue) -> Result<(), ()> {
-        self.force_set_index(inst, FlatIndex::from(indices), val, sudoku, work_q)
+    fn tell_value(&mut self, inst: &mut LLSudokuSolverInst<Self::Mask, Self::Count>, indices: FlatIndex, val: SudokuValue, sudoku: &mut Sudoku, work_q: &mut Self::WorkQueue) -> Result<(), GiveValError> {
+        self.force_set_index(inst, indices, val, sudoku, work_q)
     }
 
-    fn force_set_index(&mut self, inst: &mut LLSudokuSolverInst<Self::Mask, Self::Count>, i: FlatIndex, val: SudokuValue, sudoku: &mut Sudoku, work_q: &mut Self::WorkQueue) -> Result<(), ()>;
+    fn force_set_index(&mut self, inst: &mut LLSudokuSolverInst<Self::Mask, Self::Count>, i: FlatIndex, val: SudokuValue, sudoku: &mut Sudoku, work_q: &mut Self::WorkQueue) -> Result<(), GiveValError>;
     fn process_index(&mut self, inst: &mut LLSudokuSolverInst<Self::Mask, Self::Count>, i: FlatIndex, sudoku: &mut Sudoku, work_q: &mut Self::WorkQueue) -> Result<(), ()>;
 }
 
@@ -150,6 +162,11 @@ mod indices {
 
                 pub const fn as_idx(self) -> usize {
                     self.get()  as usize
+                }
+            }
+            impl std::fmt::Display for $name {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    std::fmt::Display::fmt(&self.0, f)
                 }
             }
         };
@@ -192,6 +209,12 @@ mod indices {
         }
         pub const fn as_mask_0based(self) -> u16 {
             1 << (self.get_0based() as u16)
+        }
+    }
+
+    impl std::fmt::Display for SudokuValue {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            std::fmt::Display::fmt(&self.get_1based().get(), f)
         }
     }
 

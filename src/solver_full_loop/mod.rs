@@ -1,8 +1,9 @@
 mod gen_mask;
 
+use std::hint::unreachable_unchecked;
 use std::simd::{SimdPartialOrd, ToBitMask};
 
-use crate::solver_base::{CellIndex, CellIndices, FlatIndex, FlatQuadrantIndex, GeneralSudokuSolver, get_quad_offset, Indices, QuadrantIndex, QuadrantIndices, SudokuValue};
+use crate::solver_base::{CellIndex, CellIndices, FlatIndex, FlatQuadrantIndex, GeneralSudokuSolver, get_quad_offset, GiveValError, Indices, QuadrantIndex, QuadrantIndices, SudokuValue};
 use crate::solver_full_loop::gen_mask::generate_mask;
 use crate::Sudoku;
 use crate::work_queue::{BitMaskWorkQueue, WorkQueue};
@@ -83,7 +84,7 @@ pub struct SolverFullLoopImpl;
 
 pub struct SolverFullLoop {
     sudoku: Sudoku,
-    content: Box<[u16; 96]>,
+    content: Box<Board>,
     work_queue: BitMaskWorkQueue,
     filled_pos: u8,
 }
@@ -95,11 +96,15 @@ fn set_value(content: &mut Board, value: SudokuValue, idx: FlatIndex, sudoku: &m
     check_set1(content, idx, value, work_q);
 }
 
-fn force_set_index(content: &mut Board, i: FlatIndex, val: SudokuValue, sudoku: &mut Sudoku, work_q: &mut BitMaskWorkQueue) -> Result<(), ()> {
+fn force_set_index(content: &mut Board, i: FlatIndex, val: SudokuValue, sudoku: &mut Sudoku, work_q: &mut BitMaskWorkQueue) -> Result<(), GiveValError> {
     let new_content = val.as_mask_0based();
-    if content[i.as_idx()] & new_content == 0 {
-        return Err(());
+    if sudoku[i].is_some() {
+        return Err(GiveValError::PositionAlreadySet)
     }
+    if content[i.as_idx()] & new_content == 0 {
+        return Err(GiveValError::ValueDoesNotFitThere);
+    }
+    work_q.0 &= !(1u128 << i.as_idx());
     set_value(content, val, i, sudoku, work_q);
     Ok(())
 }
@@ -124,19 +129,24 @@ impl GeneralSudokuSolver for SolverFullLoop {
         }
     }
 
-    fn give_val(&mut self, lc: CellIndices, v: SudokuValue) -> Result<(), ()> {
-        force_set_index(&mut self.content, FlatIndex::from(lc), v, &mut self.sudoku, &mut self.work_queue)?;
+    fn give_val(&mut self, lc: FlatIndex, v: SudokuValue) -> Result<(), GiveValError> {
+        force_set_index(&mut self.content, lc, v, &mut self.sudoku, &mut self.work_queue)?;
         self.filled_pos += 1;
         Ok(())
     }
 
-    fn run(mut self) -> Sudoku {
+    fn into_current_solved_state(self) -> Sudoku {
+        self.sudoku
+    }
+
+    fn run(mut self) -> Result<Sudoku, Sudoku> {
         while self.filled_pos < 81 {
             while let Some(idx) = self.work_queue.pop() {
                 let res = process_index(&mut self.content, idx, &mut self.sudoku, &mut self.work_queue);
                 if let Err(_) = res {
+                    unreachable!();
                     // row 8/cell 5
-                    return self.sudoku;
+
                 }
                 self.filled_pos += 1;
             }
@@ -148,6 +158,10 @@ impl GeneralSudokuSolver for SolverFullLoop {
                 break;
             }
         }
-        self.sudoku
+        if self.filled_pos < 81 {
+            return Err(self.sudoku)
+        } else {
+            return Ok(self.sudoku)
+        }
     }
 }
