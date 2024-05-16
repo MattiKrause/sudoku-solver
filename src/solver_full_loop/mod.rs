@@ -15,40 +15,22 @@ fn check_set1(content: &mut Board, i: FlatIndex, value: SudokuValue, work_q: &mu
     let active_mask = generate_mask(i);
     let remove_mask = !value.as_mask_0based();
 
-    {
-        // truncating is the goal of this
-        #[allow(clippy::cast_possible_truncation)]
-        let data_lo = active_mask as u64;
-        let data = core::simd::u16x64::from_slice(&content[0..64]);
+    for i in 0..6 {
+        let offset = 16 * i;
+        let relevant_content = &mut content[offset..][..16];
+        let active_mask = (active_mask >> offset) as u16;
+        let data = core::simd::u16x16::from_slice(relevant_content);
         let mask_out = core::simd::Simd::splat(remove_mask);
-        let mask = core::simd::Mask::from_bitmask(data_lo);
+        let mask = core::simd::Mask::from_bitmask(active_mask);
         let new_data = mask.select(data & mask_out, data);
-        new_data.copy_to_slice(&mut content[0..64]);
+        new_data.copy_to_slice(relevant_content);
 
         let is_one = {
             let eax = new_data - core::simd::Simd::splat(1);
             let edi = new_data ^ eax;
             edi.simd_gt(eax).to_bitmask()
         };
-        work_q.0 |= u128::from(is_one);
-    }
-
-    {
-        // truncating is the goal of this
-        #[allow(clippy::cast_possible_truncation)]
-        let data_high = (active_mask >> 64) as u32;
-        let data = core::simd::u16x32::from_slice(&content[64..96]);
-        let mask_out = core::simd::Simd::splat(remove_mask);
-        let mask = core::simd::Mask::from_bitmask(data_high);
-        let new_data = mask.select(data & mask_out, data);
-        new_data.copy_to_slice(&mut content[64..96]);
-
-        let is_one = {
-            let eax = new_data - core::simd::Simd::splat(1);
-            let edi = new_data ^ eax;
-            edi.simd_gt(eax).to_bitmask()
-        };
-        work_q.0 |= u128::from(is_one) << 64;
+        work_q.0 |= u128::from(is_one) << offset;
     }
 }
 
